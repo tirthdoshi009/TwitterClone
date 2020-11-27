@@ -16,12 +16,16 @@ open MathNet.Numerics.Distributions
 
 
 // create a parametrized distribution instance
+// some probability distributions
 
-
-let system = System.create "Fsharp"
+let system = System.create "system" (Configuration.defaultConfig())
 let mutable terminate = true
 let mutable N = 100
-
+let rnd = Random()
+let zipf = Zipf(1.2,N)
+let mutable array = Array.create 100 0 
+zipf.Samples(array) 
+printfn "%A" array
 let client(clientMailbox: Actor<_>) = 
     let rec loop() = 
         actor{
