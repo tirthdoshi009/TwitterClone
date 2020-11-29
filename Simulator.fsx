@@ -27,6 +27,13 @@ type Input = Start
             | Tweet of string*int
             | Live of string 
             | SubscriptionTweets of int
+            | SubscriptionTweetsList of string list
+            | HashtagTweets of string * int
+            | HashtagTweetsList of string list
+            | TweetsWithMention of int
+            | MentionTweetsList of string list
+            | GetTweetsForUser of int
+
 
 let system = System.create "FSharp" (config)
 let mutable terminate = true
@@ -113,7 +120,32 @@ let server (mailbox : Actor<_>) =
         | SubscriptionTweets(userId) -> 
             let mutable found, subscribeUsers = subscribedTo.TryGetValue userId
             let mutable subscribedTweetList = List.empty
-            
+            for subscribeUser in subscribeUsers do
+                let mutable tweetsFound, tweetList = tweets.TryGetValue subscribeUser
+                if tweetsFound then
+                    subscribedTweetList <- List.append tweetList subscribedTweetList
+            let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+            let sref = select path system 
+            sref <! SubscriptionTweetsList(subscribedTweetList)
+        | HashtagTweets(hashtag, userId) ->
+            let mutable hashtagFound, hashtagTweets = hashtagMentions.TryGetValue hashtag
+            let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+            let sref = select path system 
+            // sref <! SubscriptionTweetsList(subscribedTweetList)f
+            if hashtagFound then
+                sref <! HashtagTweetsList(hashtagTweets)
+            else 
+                sref <! HashtagTweetsList(List.empty)
+        | TweetsWithMention(userId) ->
+            let mentionFound, mentionList = userMentions.TryGetValue ("@" + (userId |> string))
+            let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+            let sref = select path system 
+            if mentionFound then
+                sref <! MentionTweetsList(mentionList)
+            else 
+                sref <! MentionTweetsList(List.empty)
+        | GetTweetsForUser(userId) -> 
+            let tweetsFound, tweetsForUser = 
         return! loop()
     }
     loop()
