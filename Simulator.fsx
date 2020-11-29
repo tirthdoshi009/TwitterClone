@@ -25,6 +25,7 @@ type Input = Start
             | RegisterUser of int
             | RegisterConfirm
             | Tweet of string*int
+            | Live of string 
 
 let system = System.create "FSharp" (config)
 let mutable terminate = true
@@ -78,24 +79,36 @@ let server (mailbox : Actor<_>) =
             let mutable newList = List.empty
             tweetList <- List.append [text] tweetList
             tweets <- tweets.Add (userId, tweetList)
-            hashtagList = getHashTagMentions text
+            let mutable hashtagList = getHashTagMentions text
             for hashtag in hashtagList do
                 if hashtagMentions.TryFind hashtag = None then
-                    hashtagMentions.Add(hashtag,[])
+                    hashtagMentions<-hashtagMentions.Add(hashtag,[])
                 let mutable found,currentList = hashtagMentions.TryGetValue hashtag
                 currentList<-List.append [text] currentList
                 hashtagMentions<-hashtagMentions.Add(hashtag,currentList)
-            mentionList = getUserMentions text
+            let mutable mentionList = getUserMentions text
             for mention in mentionList do
                 if userMentions.TryFind mention = None then
-                    userMentions.Add(mention,[])
+                    userMentions<-userMentions.Add(mention,[])
                 let mutable found,currentList = userMentions.TryGetValue mention
                 currentList<-List.append [text] currentList
                 userMentions<-userMentions.Add(mention,currentList)
                 let mutable mentionName = mention.[1..]
                 let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+mentionName).Anchor
                 let compare = currentAnchor.Equals(ActorRefs.Nobody)
-                ()
+                if compare then 
+                    let mutable path = "akka://FSharp/user/simulator/"+mentionName
+                    let mutable sref = select path system
+                    sref <! Live(text)
+                let mutable found,myFollowers = followers.TryGetValue userId
+                for currentFollower in myFollowers do
+                    let currentFollowerString = currentFollower |> string
+                    let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+currentFollowerString).Anchor
+                    let compare = currentAnchor.Equals(ActorRefs.Nobody)
+                    if compare then 
+                        let mutable path = "akka://FSharp/user/simulator/"+currentFollowerString
+                        let sref = select path system
+                        sref <! Live(text)
         return! loop()
     }
     loop()
