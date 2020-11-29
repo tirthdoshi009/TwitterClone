@@ -33,6 +33,10 @@ type Input = Start
             | TweetsWithMention of int
             | MentionTweetsList of string list
             | GetTweetsForUser of int
+            | TweetsForUserList of string list
+            | AddSubscriber of int*int
+            | DisconnectUser of int
+            | LoginUser of int
 
 
 let system = System.create "FSharp" (config)
@@ -60,6 +64,8 @@ let getUserMentions (text: string) =
 
 
     userList
+let isValidClient(ClientList: Set<int>) (userId: int) = 
+    ClientList.Contains userId
 
 let server (mailbox : Actor<_>) = 
     let mutable clientList = Set.empty
@@ -145,7 +151,24 @@ let server (mailbox : Actor<_>) =
             else 
                 sref <! MentionTweetsList(List.empty)
         | GetTweetsForUser(userId) -> 
-            let tweetsFound, tweetsForUser = 
+            let tweetsFound, tweetsForUser = tweets.TryGetValue userId
+            let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+            let sref = select path system 
+            if tweetsFound then
+                sref<!TweetsForUserList(tweetsForUser)
+            else
+                sref<!TweetsForUserList(List.empty)
+        | AddSubscriber(userId,subscriberId) ->
+            let mutable subscriberFound, subscriberList = subscribedTo.TryGetValue userId
+            subscriberList<-List.append [subscriberId] subscriberList
+            subscribedTo<-subscribedTo.Add(userId,subscriberList)
+            let mutable followerFound, followerList = followers.TryGetValue subscriberId
+            followerList<-List.append [userId] followerList
+            followers<-followers.Add(subscriberId,followerList)
+        | DisconnectUser(userId)->
+            clientList<-clientList.Remove userId
+        | LoginUser(userId) ->
+            clientList<-clientList.Add userId
         return! loop()
     }
     loop()
