@@ -1,5 +1,3 @@
-#load "PastrySimulator.fsx"
-
 #time "on"
 #r "nuget: Akka.FSharp" 
 #r "nuget: Akka.TestKit" 
@@ -14,6 +12,7 @@ open Akka.TestKit
 open FSharp.Control
 open MathNet.Numerics.Random
 open MathNet.Numerics.Distributions
+// open Akka.ActorSelection
 
 let config =
     Configuration.parse
@@ -32,11 +31,26 @@ let mutable terminate = true
 
 let getHashTagMentions (text : string) = 
     let wordList = text.Split(' ') |> Array.toList
-    let hashtagList = List.choose ( fun (word : string) -> 
-        match word with
-        | word when word.[0] = '#' -> Some(word)
-        | _ -> None) wordList
+    let startsWithHashtag(word: string) = (word.[0] = '#')
+    let hashtagList =
+        List.choose(fun word -> 
+                        match word with
+                        | word when startsWithHashtag word -> Some(word)
+                        | _-> None) wordList
+
     hashtagList
+
+let getUserMentions (text: string) = 
+    let wordList = text.Split(' ') |> Array.toList
+    let startsWithUser(word: string) = (word.[0] = '@')
+    let userList =
+        List.choose(fun word -> 
+                        match word with
+                        | word when startsWithUser word -> Some(word)
+                        | _-> None) wordList
+
+
+    userList
 
 let server (mailbox : Actor<_>) = 
     let mutable clientList = Set.empty
@@ -44,6 +58,7 @@ let server (mailbox : Actor<_>) =
     let mutable hashtagMentions = Map.empty
     let mutable subscribedTo = Map.empty
     let mutable followers = Map.empty
+    let mutable userMentions = Map.empty
     let rec loop() = actor{
         let! message = mailbox.Receive()
         let sender = mailbox.Sender()
@@ -63,7 +78,24 @@ let server (mailbox : Actor<_>) =
             let mutable newList = List.empty
             tweetList <- List.append [text] tweetList
             tweets <- tweets.Add (userId, tweetList)
-            hashtagMentionList = getHashTagMentions text
+            hashtagList = getHashTagMentions text
+            for hashtag in hashtagList do
+                if hashtagMentions.TryFind hashtag = None then
+                    hashtagMentions.Add(hashtag,[])
+                let mutable found,currentList = hashtagMentions.TryGetValue hashtag
+                currentList<-List.append [text] currentList
+                hashtagMentions<-hashtagMentions.Add(hashtag,currentList)
+            mentionList = getUserMentions text
+            for mention in mentionList do
+                if userMentions.TryFind mention = None then
+                    userMentions.Add(mention,[])
+                let mutable found,currentList = userMentions.TryGetValue mention
+                currentList<-List.append [text] currentList
+                userMentions<-userMentions.Add(mention,currentList)
+                let mutable mentionName = mention.[1..]
+                let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+mentionName).Anchor
+                let compare = currentAnchor.Equals(ActorRefs.Nobody)
+                ()
         return! loop()
     }
     loop()
