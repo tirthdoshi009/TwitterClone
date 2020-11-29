@@ -26,6 +26,7 @@ type Input = Start
             | RegisterConfirm
             | Tweet of string*int
             | Live of string 
+            | SubscriptionTweets of int
 
 let system = System.create "FSharp" (config)
 let mutable terminate = true
@@ -109,6 +110,10 @@ let server (mailbox : Actor<_>) =
                         let mutable path = "akka://FSharp/user/simulator/"+currentFollowerString
                         let sref = select path system
                         sref <! Live(text)
+        | SubscriptionTweets(userId) -> 
+            let mutable found, subscribeUsers = subscribedTo.TryGetValue userId
+            let mutable subscribedTweetList = List.empty
+            
         return! loop()
     }
     loop()
