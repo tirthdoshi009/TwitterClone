@@ -39,6 +39,7 @@ type Input = Start
             | DisconnectUser of int
             | LoginUser of int
             | Initialize of bool
+            | PerformanceMetrics of float*float*float*float*float
 
 // TODO: Figure out what happens when we use remote actors... Then two actor systems are there, how will we manage it?
 let system = System.create "FSharp" (config)
@@ -177,6 +178,8 @@ let server (mailbox : Actor<_>) =
             clientList<-clientList.Remove userId
         | LoginUser(userId) ->
             clientList<-clientList.Add userId
+
+        | PerformanceMetrics()
         return! loop()
     }
     loop()
@@ -222,11 +225,60 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
                     let text = list.Head
                     serverActor <! Tweet(text + " -RT", userId)
             stopWatch.Stop()
-            let tweetsTimeDifference = stopWatch.Elapsed.TotalMilliseconds
+            let mutable tweetsTimeDifference = stopWatch.Elapsed.TotalMilliseconds
+            // Queries
+            let querySubscribedToStopWatch = System.Diagnostics.Stopwatch.StartNew()
+            // Handle query subscribed to
+            // What do I need to do -> 
+            let queryTask = serverActor <? GetTweetsForUser(userId)
+            let queryResponse: Input = Async.RunSynchronously(queryTask, 5000)
+            match queryResponse with
+                | TweetsForUserList(list) -> 
+                    if not list.IsEmpty then
+                        printfn "Tweets subscribed by userId : %d are %A" userId list
+            querySubscribedToStopWatch.Stop()
+            let querySubscribedToTimeDifference = querySubscribedToStopWatch.Elapsed.TotalMilliseconds
+            let queryHashTagStopWatch = System.Diagnostics.Stopwatch.StartNew()
+            let queryHashTagTask = serverActor <? HashtagTweets("#COP5615",userId)
+            let queryHashTagResponse: Input = Async.RunSynchronously(queryHashTagTask, 5000)
+            match queryHashTagResponse with
+            | HashtagTweetsList(list) ->
+                if not list.IsEmpty then
+                    printfn "The tweets for the #COP5615 by userId %d is %A " userId list
+            queryHashTagStopWatch.Stop()
+            let queryHashTagElapsedTime = queryHashTagStopWatch.Elapsed.TotalMilliseconds
+
+            //Mentions 
+            
+            let queryMentionsStopWatch = System.Diagnostics.Stopwatch.StartNew()
+            let queryMentionsTask = serverActor <? TweetsWithMention(userId)
+            let queryMentionsResponse: Input = Async.RunSynchronously(queryMentionsTask, 5000)
+            match queryMentionsResponse with
+            | MentionTweetsList(list) ->
+                if not list.IsEmpty then
+                    printfn "The tweets mentioning userId %d are %A" userId list
+            queryMentionsStopWatch.Stop()
+            let queryMentionsElapsedTime = queryHashTagStopWatch.Elapsed.TotalMilliseconds
+            // Get all your own tweets
+            let queryOwnTweetsStopWatch = System.Diagnostics.Stopwatch.StartNew()
+            let queryOwnTweetsTask = serverActor <? GetTweetsForUser(userId)
+            let queryOwnTweetsResponse: Input = Async.RunSynchronously(queryOwnTweetsTask, 5000)
+            match queryOwnTweetsResponse with
+            | TweetsForUserList(list) ->
+                if not list.IsEmpty then
+                    printfn "The tweets feed for the user %d are %A" userId list
+            queryOwnTweetsStopWatch.Stop()
+            let queryOwnTweetsElapsedTime = queryOwnTweetsStopWatch.Elapsed.TotalMilliseconds
+
+            // Get tweet time difference
+            let mutable averageTweetTimeDifference = float(tweetsTimeDifference)/float(3)
+            // tweetTimeDiff
+            serverActor <! PerformanceMetrics(averageTweetTimeDifference,querySubscribedToTimeDifference,queryHashTagElapsedTime,queryMentionsElapsedTime,queryOwnTweetsElapsedTime)
+
             
         | Live(text) ->
             printfn "New Tweet received by %d. Tweet text is given by %s" userId text
-        | 
+ 
         | _ -> ignore
         return! loop()
     }
