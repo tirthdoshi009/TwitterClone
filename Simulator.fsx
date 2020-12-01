@@ -40,6 +40,7 @@ type Input = Start
             | LoginUser of int
             | Initialize of bool
             | PerformanceMetrics of float*float*float*float*float
+            | Test of string
 
 // TODO: Figure out what happens when we use remote actors... Then two actor systems are there, how will we manage it?
 let system = System.create "FSharp" (config)
@@ -84,7 +85,7 @@ let server (mailbox : Actor<_>) =
         let! message = mailbox.Receive()
         printfn "Message = %A" message
         let sender = mailbox.Sender()
-        match message with
+        match message with 
         | RegisterUser(userId) -> 
             clientList <- clientList.Add userId
             tweets <- tweets.Add (userId, List.empty)
@@ -117,22 +118,22 @@ let server (mailbox : Actor<_>) =
                 let mutable mentionName = mention.[1..]
                 printfn "mention = %s mentionName = %s mentionName length = %d " mention mentionName mentionName.Length
                 // "akka://FSharp/user/simulator/"+ (i|> string) 
-                let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+mentionName).Anchor
+                let currentAnchor = system.ActorSelection("akka://FSharp/user/"+(1|>string)).Anchor
                 let compare = currentAnchor.Equals(ActorRefs.Nobody)
                 printfn "User id validity = %b Does actor exist? = %b" (isValidClient clientList userId) compare
                 if (isValidClient clientList userId) then 
-                    let mutable path = "akka://FSharp/user/simulator/"+mentionName
+                    let mutable path = "akka://FSharp/user/"+mentionName
                     let mutable sref = select path system
                     printfn "Path of actor with userid = %d is %s" userId path
                     sref <! Live(text)
-                printfn "Live Message sent!"
+                    printfn "Live message sent to actor %s" mentionName
                 let mutable found,myFollowers = followers.TryGetValue userId
                 for currentFollower in myFollowers do
                     let currentFollowerString = currentFollower |> string
                     // let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+currentFollowerString).Anchor
                     // let compare = currentAnchor.Equals(ActorRefs.Nobody)
                     if (isValidClient clientList userId) then 
-                        let mutable path = "akka://FSharp/user/simulator/"+currentFollowerString
+                        let mutable path = "akka://FSharp/user/"+currentFollowerString
                         let sref = select path system
                         sref <! Live(text)
         | SubscriptionTweets(userId) -> 
@@ -143,37 +144,38 @@ let server (mailbox : Actor<_>) =
                 if tweetsFound then
                     subscribedTweetList <- List.append tweetList subscribedTweetList
             if (isValidClient clientList userId) then  
-                let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
-                let sref = select path system 
-                sref <! SubscriptionTweetsList(subscribedTweetList)
+                // let mutable path = "akka://FSharp/user/"+ (userId |> string)
+                // let sref = select path system 
+                // sref <! SubscriptionTweetsList(subscribedTweetList)
+                sender <! SubscriptionTweetsList(subscribedTweetList)
         | HashtagTweets(hashtag, userId) ->
             if (isValidClient clientList userId) then 
                 let mutable hashtagFound, hashtagTweets = hashtagMentions.TryGetValue hashtag
-                let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+                let mutable path = "akka://FSharp/user/"+ (userId |> string)
                 let sref = select path system 
                 // sref <! SubscriptionTweetsList(subscribedTweetList)f
                 if hashtagFound then
-                    sref <! HashtagTweetsList(hashtagTweets)
+                    sender <! HashtagTweetsList(hashtagTweets)
                 else 
-                    sref <! HashtagTweetsList(List.empty)
+                    sender <! HashtagTweetsList(List.empty)
         | TweetsWithMention(userId) ->
             if (isValidClient clientList userId) then 
                 let mentionFound, mentionList = userMentions.TryGetValue ("@" + (userId |> string))
-                let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+                let mutable path = "akka://FSharp/user/"+ (userId |> string)
                 let sref = select path system 
                 if mentionFound then
-                    sref <! MentionTweetsList(mentionList)
+                    sender <! MentionTweetsList(mentionList)
                 else 
-                    sref <! MentionTweetsList(List.empty)
+                    sender <! MentionTweetsList(List.empty)
         | GetTweetsForUser(userId) -> 
             if (isValidClient clientList userId) then 
                 let tweetsFound, tweetsForUser = tweets.TryGetValue userId
-                let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+                let mutable path = "akka://FSharp/user/"+ (userId |> string)
                 let sref = select path system 
                 if tweetsFound then
-                    sref<!TweetsForUserList(tweetsForUser)
+                    sender<!TweetsForUserList(tweetsForUser)
                 else
-                    sref<!TweetsForUserList(List.empty)
+                    sender<!TweetsForUserList(List.empty)
         | AddSubscriber(userId,subscriberId) ->
             let mutable subscriberFound, subscriberList = subscribedTo.TryGetValue userId
             subscriberList<-List.append [subscriberId] subscriberList
@@ -186,12 +188,18 @@ let server (mailbox : Actor<_>) =
             clientList<-clientList.Remove userId
         | LoginUser(userId) ->
             clientList<-clientList.Add userId
-        | _ -> ignore
+        | Test(text) -> printfn "Text received %s" text
         return! loop()
     }
     loop()
 
 let serverActor = spawn system "serverActor" server 
+let path = "akka://FSharp/user/serverActor"
+let userServer = select path system
+userServer<! Test("Hello Message")
+// serverActor<! Test("Hello message")
+// let compare = currentAnchor.Equals(ActorRefs.Nobody)
+// printfn "Does server actor exist? = %b"  compare
 
 let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Actor<_>) = 
     // TODO : play around with subscriber and tweets count
@@ -227,8 +235,10 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
                 let text ="user " + (userId |> string) + "is tweeting that dos is a great course"  
                 serverActor <! Tweet(text, userId)
             // Handle retweets
+            printfn "Awaiting response"
             let task = (serverActor <? SubscriptionTweets(userId))
             let taskResponse: Input = Async.RunSynchronously(task, 5000) 
+            printfn "Got response"
             match taskResponse with 
             | SubscriptionTweetsList(list) -> 
                 if not list.IsEmpty then
@@ -310,9 +320,9 @@ let clientSystem (userCount:int) (disconnectCount:int) (subscriberCounts: int) (
             zipf.Samples(array)
             printfn "Zipf distribution = %A" array
             for i in 1..userCount do
-                spawn mailbox (i |> string) (client i (int(userCount/i)) array.[i-1])
+                spawn system (i |> string) (client i (int(userCount/i)) array.[i-1])
             for i in 1..userCount do
-                let mutable path = "akka://FSharp/user/simulator/"+ (i|> string) 
+                let mutable path = "akka://FSharp/user/"+ (i|> string) 
                 let iActorRef = select path system
                 printfn "iActorRefPath = %s" iActorRef.PathString
                 iActorRef <! Initialize(false) 
@@ -352,8 +362,8 @@ let main() =
     else
         // spawn system "serverActor" server 
         // let userCount = fsi.CommandLineArgs.[1] |> int
-        let userCount = 5
-        let maxSubscriberCount = 2
+        let userCount = 100
+        let maxSubscriberCount = 20
         let disconnectPercentage = 10
         // let maxSubscriberCount = fsi.CommandLineArgs.[2] |> int 
         // let disconnectPercentage = fsi.CommandLineArgs.[3] |> int
