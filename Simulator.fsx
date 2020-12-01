@@ -18,7 +18,7 @@ open MathNet.Numerics.Distributions
 let config =
     Configuration.parse
         @"akka {
-                log-dead-letters = off
+                log-dead-letters = on
             }
         }"
 
@@ -43,7 +43,7 @@ type Input = Start
 
 // TODO: Figure out what happens when we use remote actors... Then two actor systems are there, how will we manage it?
 let system = System.create "FSharp" (config)
-let serverActor = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:9001/user/server")
+// let serverActor = spawn system "serverActor" server 
 let mutable terminate = true
 let rnd = Random()
 
@@ -73,6 +73,7 @@ let isValidClient(ClientList: Set<int>) (userId: int) =
     ClientList.Contains userId
 
 let server (mailbox : Actor<_>) = 
+    printfn "Server Started!"
     let mutable clientList = Set.empty
     let mutable tweets = Map.empty
     let mutable hashtagMentions = Map.empty
@@ -81,6 +82,7 @@ let server (mailbox : Actor<_>) =
     let mutable userMentions = Map.empty
     let rec loop() = actor{
         let! message = mailbox.Receive()
+        printfn "Message = %A" message
         let sender = mailbox.Sender()
         match message with
         | RegisterUser(userId) -> 
@@ -113,12 +115,17 @@ let server (mailbox : Actor<_>) =
                 currentList<-List.append [text] currentList
                 userMentions<-userMentions.Add(mention,currentList)
                 let mutable mentionName = mention.[1..]
-                // let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+mentionName).Anchor
-                // let compare = currentAnchor.Equals(ActorRefs.Nobody)
+                printfn "mention = %s mentionName = %s mentionName length = %d " mention mentionName mentionName.Length
+                // "akka://FSharp/user/simulator/"+ (i|> string) 
+                let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+mentionName).Anchor
+                let compare = currentAnchor.Equals(ActorRefs.Nobody)
+                printfn "User id validity = %b Does actor exist? = %b" (isValidClient clientList userId) compare
                 if (isValidClient clientList userId) then 
                     let mutable path = "akka://FSharp/user/simulator/"+mentionName
                     let mutable sref = select path system
+                    printfn "Path of actor with userid = %d is %s" userId path
                     sref <! Live(text)
+                printfn "Live Message sent!"
                 let mutable found,myFollowers = followers.TryGetValue userId
                 for currentFollower in myFollowers do
                     let currentFollowerString = currentFollower |> string
@@ -174,21 +181,24 @@ let server (mailbox : Actor<_>) =
             let mutable followerFound, followerList = followers.TryGetValue subscriberId
             followerList<-List.append [userId] followerList
             followers<-followers.Add(subscriberId,followerList)
+            printfn "AddSubscriber is done! for Userid %d subscriberId %d" userId subscriberId 
         | DisconnectUser(userId)->
             clientList<-clientList.Remove userId
         | LoginUser(userId) ->
             clientList<-clientList.Add userId
-
-        | PerformanceMetrics()
+        | _ -> ignore
         return! loop()
     }
     loop()
+
+let serverActor = spawn system "serverActor" server 
 
 let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Actor<_>) = 
     // TODO : play around with subscriber and tweets count
     // TODO: Declare variables
     let rec loop() = actor{
         let! message = mailbox.Receive()
+        printfn "Message = %A" message
         let sender = mailbox.Sender()
         match message with
         | Initialize(existingUser) -> 
@@ -273,31 +283,54 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
             // Get tweet time difference
             let mutable averageTweetTimeDifference = float(tweetsTimeDifference)/float(3)
             // tweetTimeDiff
-            serverActor <! PerformanceMetrics(averageTweetTimeDifference,querySubscribedToTimeDifference,queryHashTagElapsedTime,queryMentionsElapsedTime,queryOwnTweetsElapsedTime)
-
-            
+            let simulatorRef = select ("akka://FSharp/user/simulator") system 
+            simulatorRef <! PerformanceMetrics(averageTweetTimeDifference,querySubscribedToTimeDifference,queryHashTagElapsedTime,queryMentionsElapsedTime,queryOwnTweetsElapsedTime)
         | Live(text) ->
             printfn "New Tweet received by %d. Tweet text is given by %s" userId text
- 
         | _ -> ignore
         return! loop()
     }
     loop()
 
-let clientSystem (userCount:int) (disconnectCount:int) (subscriberCounts: int array) (mailbox : Actor<_>) = 
+let clientSystem (userCount:int) (disconnectCount:int) (subscriberCounts: int) (mailbox : Actor<_>) = 
     let mutable convergedCount = 0
-    let mutable tweetTimeDiff = 0
-    let mutable subscribeQueryDiff = 0
-    let mutable hashtagQueryDiff = 0
-    let mutable mentionQueryDiff = 0
-    let mutable selfTweetsQueryDiff = 0
+    let mutable tweetTimeDiff = float(0)
+    let mutable subscribeQueryDiff = float(0)
+    let mutable hashtagQueryDiff = float(0)
+    let mutable mentionQueryDiff = float(0)
+    let mutable selfTweetsQueryDiff = float(0)
     let rec loop() = actor{
         let! message = mailbox.Receive()
+        printfn "Message = %A" message
         let sender = mailbox.Sender()
         match message with
         | Start -> 
+            let zipf = Zipf(1.2,userCount)
+            let mutable array = Array.create userCount 0 
+            zipf.Samples(array)
+            printfn "Zipf distribution = %A" array
             for i in 1..userCount do
-                spawn mailbox (i |> string) (client )
+                spawn mailbox (i |> string) (client i (int(userCount/i)) array.[i-1])
+            for i in 1..userCount do
+                let mutable path = "akka://FSharp/user/simulator/"+ (i|> string) 
+                let iActorRef = select path system
+                printfn "iActorRefPath = %s" iActorRef.PathString
+                iActorRef <! Initialize(false) 
+        | PerformanceMetrics(averageTweetTimeDifference,querySubscribedToTimeDifference,queryHashTagElapsedTime,queryMentionsElapsedTime,queryOwnTweetsElapsedTime) ->
+            convergedCount <- convergedCount + 1
+            tweetTimeDiff <- averageTweetTimeDifference + tweetTimeDiff 
+            subscribeQueryDiff <- querySubscribedToTimeDifference + subscribeQueryDiff
+            hashtagQueryDiff <- hashtagQueryDiff + queryHashTagElapsedTime
+            mentionQueryDiff <- mentionQueryDiff + queryMentionsElapsedTime
+            selfTweetsQueryDiff<- queryOwnTweetsElapsedTime + selfTweetsQueryDiff
+            if convergedCount = userCount then
+                printfn "Final Metrics: "
+                printfn "Avg. time to tweet: %f milliseconds" (float(tweetTimeDiff/float(userCount)))
+                printfn "Avg. time to query tweets subscribe to: %f milliseconds" (float(subscribeQueryDiff/float(userCount)))
+                printfn "Avg. time to query tweets by hashtag: %f milliseconds" (float(hashtagQueryDiff/float(userCount)))
+                printfn "Avg. time to query tweets by mention: %f milliseconds" (float(mentionQueryDiff/float(userCount)))
+                printfn "Avg. time to query all relevant tweets: %f milliseconds" (float(mentionQueryDiff/float(userCount))) 
+                terminate <- false 
         return! loop()
     }
     loop()
@@ -315,10 +348,15 @@ let simulate (userCount:int) (disconnectCount:int) (maxSubscriberCount:int)=
 let main() = 
     if fsi.CommandLineArgs.Length = 0 then
         spawn system "serverActor" server
-    else 
-        let userCount = fsi.CommandLineArgs.[1] |> int
-        let maxSubscriberCount = fsi.CommandLineArgs.[2] |> int 
-        let disconnectPercentage = fsi.CommandLineArgs.[3] |> int
+        ()
+    else
+        // spawn system "serverActor" server 
+        // let userCount = fsi.CommandLineArgs.[1] |> int
+        let userCount = 5
+        let maxSubscriberCount = 2
+        let disconnectPercentage = 10
+        // let maxSubscriberCount = fsi.CommandLineArgs.[2] |> int 
+        // let disconnectPercentage = fsi.CommandLineArgs.[3] |> int
         printfn "userCount=%i maxSubscriberCount = %i disconnectPercentage=%i" userCount maxSubscriberCount disconnectPercentage
         let disconnectCount = int(0.01*float(disconnectPercentage)*float(userCount))
         // let subscriberCounts = Array.create userCount 0 
