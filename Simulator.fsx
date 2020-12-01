@@ -14,6 +14,7 @@ open MathNet.Numerics.Random
 open MathNet.Numerics.Distributions
 // open Akka.ActorSelection
 
+// TODO: Set Remote configuration
 let config =
     Configuration.parse
         @"akka {
@@ -37,10 +38,13 @@ type Input = Start
             | AddSubscriber of int*int
             | DisconnectUser of int
             | LoginUser of int
+            | Initialize of bool
 
-
+// TODO: Figure out what happens when we use remote actors... Then two actor systems are there, how will we manage it?
 let system = System.create "FSharp" (config)
+let serverActor = system.ActorSelection("akka.tcp://RemoteFSharp@localhost:9001/user/server")
 let mutable terminate = true
+let rnd = Random()
 
 let getHashTagMentions (text : string) = 
     let wordList = text.Split(' ') |> Array.toList
@@ -62,8 +66,8 @@ let getUserMentions (text: string) =
                         | word when startsWithUser word -> Some(word)
                         | _-> None) wordList
 
-
     userList
+
 let isValidClient(ClientList: Set<int>) (userId: int) = 
     ClientList.Contains userId
 
@@ -108,18 +112,18 @@ let server (mailbox : Actor<_>) =
                 currentList<-List.append [text] currentList
                 userMentions<-userMentions.Add(mention,currentList)
                 let mutable mentionName = mention.[1..]
-                let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+mentionName).Anchor
-                let compare = currentAnchor.Equals(ActorRefs.Nobody)
-                if compare then 
+                // let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+mentionName).Anchor
+                // let compare = currentAnchor.Equals(ActorRefs.Nobody)
+                if (isValidClient clientList userId) then 
                     let mutable path = "akka://FSharp/user/simulator/"+mentionName
                     let mutable sref = select path system
                     sref <! Live(text)
                 let mutable found,myFollowers = followers.TryGetValue userId
                 for currentFollower in myFollowers do
                     let currentFollowerString = currentFollower |> string
-                    let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+currentFollowerString).Anchor
-                    let compare = currentAnchor.Equals(ActorRefs.Nobody)
-                    if compare then 
+                    // let currentAnchor = system.ActorSelection("akka://FSharp/user/simulator/"+currentFollowerString).Anchor
+                    // let compare = currentAnchor.Equals(ActorRefs.Nobody)
+                    if (isValidClient clientList userId) then 
                         let mutable path = "akka://FSharp/user/simulator/"+currentFollowerString
                         let sref = select path system
                         sref <! Live(text)
@@ -130,34 +134,38 @@ let server (mailbox : Actor<_>) =
                 let mutable tweetsFound, tweetList = tweets.TryGetValue subscribeUser
                 if tweetsFound then
                     subscribedTweetList <- List.append tweetList subscribedTweetList
-            let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
-            let sref = select path system 
-            sref <! SubscriptionTweetsList(subscribedTweetList)
+            if (isValidClient clientList userId) then  
+                let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+                let sref = select path system 
+                sref <! SubscriptionTweetsList(subscribedTweetList)
         | HashtagTweets(hashtag, userId) ->
-            let mutable hashtagFound, hashtagTweets = hashtagMentions.TryGetValue hashtag
-            let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
-            let sref = select path system 
-            // sref <! SubscriptionTweetsList(subscribedTweetList)f
-            if hashtagFound then
-                sref <! HashtagTweetsList(hashtagTweets)
-            else 
-                sref <! HashtagTweetsList(List.empty)
+            if (isValidClient clientList userId) then 
+                let mutable hashtagFound, hashtagTweets = hashtagMentions.TryGetValue hashtag
+                let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+                let sref = select path system 
+                // sref <! SubscriptionTweetsList(subscribedTweetList)f
+                if hashtagFound then
+                    sref <! HashtagTweetsList(hashtagTweets)
+                else 
+                    sref <! HashtagTweetsList(List.empty)
         | TweetsWithMention(userId) ->
-            let mentionFound, mentionList = userMentions.TryGetValue ("@" + (userId |> string))
-            let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
-            let sref = select path system 
-            if mentionFound then
-                sref <! MentionTweetsList(mentionList)
-            else 
-                sref <! MentionTweetsList(List.empty)
+            if (isValidClient clientList userId) then 
+                let mentionFound, mentionList = userMentions.TryGetValue ("@" + (userId |> string))
+                let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+                let sref = select path system 
+                if mentionFound then
+                    sref <! MentionTweetsList(mentionList)
+                else 
+                    sref <! MentionTweetsList(List.empty)
         | GetTweetsForUser(userId) -> 
-            let tweetsFound, tweetsForUser = tweets.TryGetValue userId
-            let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
-            let sref = select path system 
-            if tweetsFound then
-                sref<!TweetsForUserList(tweetsForUser)
-            else
-                sref<!TweetsForUserList(List.empty)
+            if (isValidClient clientList userId) then 
+                let tweetsFound, tweetsForUser = tweets.TryGetValue userId
+                let mutable path = "akka://FSharp/user/simulator/"+ (userId |> string)
+                let sref = select path system 
+                if tweetsFound then
+                    sref<!TweetsForUserList(tweetsForUser)
+                else
+                    sref<!TweetsForUserList(List.empty)
         | AddSubscriber(userId,subscriberId) ->
             let mutable subscriberFound, subscriberList = subscribedTo.TryGetValue userId
             subscriberList<-List.append [subscriberId] subscriberList
@@ -173,7 +181,58 @@ let server (mailbox : Actor<_>) =
     }
     loop()
 
-let application (userCount:int) (disconnectCount:int) (subscriberCounts: int array) (mailbox : Actor<_>) = 
+let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Actor<_>) = 
+    // TODO : play around with subscriber and tweets count
+    // TODO: Declare variables
+    let rec loop() = actor{
+        let! message = mailbox.Receive()
+        let sender = mailbox.Sender()
+        match message with
+        | Initialize(existingUser) -> 
+            if existingUser then
+                printfn "User %d is connected" userId
+                serverActor <! LoginUser(userId)
+                for i in 1..5 do
+                    let text ="user " + (userId |> string) + "is tweeting that dos is a great course"  
+                    serverActor <! Tweet(text, userId)
+            let task = (serverActor <? RegisterUser(userId))
+            let response = Async.RunSynchronously(task, 5000)
+            printfn "User %d is registered!" userId
+            if numToSubscribe > 0 then
+                for subscriberId in 1..numToSubscribe do 
+                    serverActor <! AddSubscriber(userId, subscriberId)
+            let stopWatch = System.Diagnostics.Stopwatch.StartNew()
+            // Mention
+            let userToMention =  rnd.Next() % userId + 1
+            let text = "User " + (userId |> string) + " Tweeting that @" + (userToMention |> string) 
+            serverActor <! Tweet(text, userId)
+            // Hashtag
+            let text = "User " + (userId |> string) + " Tweeting that #COP5615 is a great course" 
+            serverActor <! Tweet(text, userId)
+            // Send tweets
+            for i in 1..numOfTweets do
+                let text ="user " + (userId |> string) + "is tweeting that dos is a great course"  
+                serverActor <! Tweet(text, userId)
+            // Handle retweets
+            let task = (serverActor <? SubscriptionTweets(userId))
+            let taskResponse: Input = Async.RunSynchronously(task, 5000) 
+            match taskResponse with 
+            | SubscriptionTweetsList(list) -> 
+                if not list.IsEmpty then
+                    let text = list.Head
+                    serverActor <! Tweet(text + " -RT", userId)
+            stopWatch.Stop()
+            let tweetsTimeDifference = stopWatch.Elapsed.TotalMilliseconds
+            
+        | Live(text) ->
+            printfn "New Tweet received by %d. Tweet text is given by %s" userId text
+        | 
+        | _ -> ignore
+        return! loop()
+    }
+    loop()
+
+let clientSystem (userCount:int) (disconnectCount:int) (subscriberCounts: int array) (mailbox : Actor<_>) = 
     let mutable convergedCount = 0
     let mutable tweetTimeDiff = 0
     let mutable subscribeQueryDiff = 0
@@ -185,17 +244,16 @@ let application (userCount:int) (disconnectCount:int) (subscriberCounts: int arr
         let sender = mailbox.Sender()
         match message with
         | Start -> 
-            spawn mailbox "TwitterServer" server
             for i in 1..userCount do
                 spawn mailbox (i |> string) (client )
         return! loop()
     }
     loop()
 
-let simulate (userCount:int) (disconnectCount:int) (subscriberCounts:int array)= 
+let simulate (userCount:int) (disconnectCount:int) (maxSubscriberCount:int)= 
     printfn "Starting Pastry protocol for userCount = %i disconnectCount = %i" userCount disconnectCount
     let stopWatch = System.Diagnostics.Stopwatch.StartNew()
-    let parentRef = spawn system "master" (application userCount disconnectCount subscriberCounts)
+    let parentRef = spawn system "simulator" (clientSystem userCount disconnectCount maxSubscriberCount)
     parentRef <! Start
     while terminate do
         ignore
@@ -203,14 +261,17 @@ let simulate (userCount:int) (disconnectCount:int) (subscriberCounts:int array)=
     printfn "Total time elapsed is given by %f milliseconds" stopWatch.Elapsed.TotalMilliseconds
 
 let main() = 
-    let userCount = int fsi.CommandLineArgs.[1] |> int
-    let disconnectPercentage = fsi.CommandLineArgs.[2] |> int
-    printfn "userCount=%i disconnectPercentage=%i" userCount disconnectPercentage
-    let disconnectCount = int(0.01*float(disconnectPercentage)*float(userCount))
-    let zipf = Zipf(1.2, userCount)
-    let subscriberCounts = Array.create userCount 0 
-    zipf.Samples(subscriberCounts)
-    simulate userCount disconnectCount subscriberCounts
+    if fsi.CommandLineArgs.Length = 0 then
+        spawn system "serverActor" server
+    else 
+        let userCount = fsi.CommandLineArgs.[1] |> int
+        let maxSubscriberCount = fsi.CommandLineArgs.[2] |> int 
+        let disconnectPercentage = fsi.CommandLineArgs.[3] |> int
+        printfn "userCount=%i maxSubscriberCount = %i disconnectPercentage=%i" userCount maxSubscriberCount disconnectPercentage
+        let disconnectCount = int(0.01*float(disconnectPercentage)*float(userCount))
+        // let subscriberCounts = Array.create userCount 0 
+        // zipf.Samples(subscriberCounts)
+        simulate userCount disconnectCount maxSubscriberCount
 
 main()
 
