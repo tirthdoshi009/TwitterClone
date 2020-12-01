@@ -12,6 +12,7 @@ open Akka.TestKit
 open FSharp.Control
 open MathNet.Numerics.Random
 open MathNet.Numerics.Distributions
+open System.IO
 // open Akka.ActorSelection
 
 // TODO: Set Remote configuration
@@ -83,7 +84,7 @@ let server (mailbox : Actor<_>) =
     let mutable userMentions = Map.empty
     let rec loop() = actor{
         let! message = mailbox.Receive()
-        printfn "Message = %A" message
+        // printfn "Message = %A" message
         let sender = mailbox.Sender()
         match message with 
         | RegisterUser(userId) -> 
@@ -188,15 +189,15 @@ let server (mailbox : Actor<_>) =
             clientList<-clientList.Remove userId
         | LoginUser(userId) ->
             clientList<-clientList.Add userId
-        | Test(text) -> printfn "Text received %s" text
+        | _-> ignore
         return! loop()
     }
     loop()
 
 let serverActor = spawn system "serverActor" server 
 let path = "akka://FSharp/user/serverActor"
-let userServer = select path system
-userServer<! Test("Hello Message")
+// let userServer = select path system
+// userServer<! Test("Hello Message")
 // serverActor<! Test("Hello message")
 // let compare = currentAnchor.Equals(ActorRefs.Nobody)
 // printfn "Does server actor exist? = %b"  compare
@@ -206,7 +207,7 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
     // TODO: Declare variables
     let rec loop() = actor{
         let! message = mailbox.Receive()
-        printfn "Message = %A" message
+        // printfn "Message = %A" message
         let sender = mailbox.Sender()
         match message with
         | Initialize(existingUser) -> 
@@ -217,7 +218,7 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
                     let text ="user " + (userId |> string) + "is tweeting that dos is a great course"  
                     serverActor <! Tweet(text, userId)
             let task = (serverActor <? RegisterUser(userId))
-            let response = Async.RunSynchronously(task, 5000)
+            let response = Async.RunSynchronously(task)
             printfn "User %d is registered!" userId
             if numToSubscribe > 0 then
                 for subscriberId in 1..numToSubscribe do 
@@ -237,7 +238,7 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
             // Handle retweets
             printfn "Awaiting response"
             let task = (serverActor <? SubscriptionTweets(userId))
-            let taskResponse: Input = Async.RunSynchronously(task, 5000) 
+            let taskResponse: Input = Async.RunSynchronously(task) 
             printfn "Got response"
             match taskResponse with 
             | SubscriptionTweetsList(list) -> 
@@ -251,7 +252,7 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
             // Handle query subscribed to
             // What do I need to do -> 
             let queryTask = serverActor <? GetTweetsForUser(userId)
-            let queryResponse: Input = Async.RunSynchronously(queryTask, 5000)
+            let queryResponse: Input = Async.RunSynchronously(queryTask)
             match queryResponse with
                 | TweetsForUserList(list) -> 
                     if not list.IsEmpty then
@@ -260,7 +261,7 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
             let querySubscribedToTimeDifference = querySubscribedToStopWatch.Elapsed.TotalMilliseconds
             let queryHashTagStopWatch = System.Diagnostics.Stopwatch.StartNew()
             let queryHashTagTask = serverActor <? HashtagTweets("#COP5615",userId)
-            let queryHashTagResponse: Input = Async.RunSynchronously(queryHashTagTask, 5000)
+            let queryHashTagResponse: Input = Async.RunSynchronously(queryHashTagTask)
             match queryHashTagResponse with
             | HashtagTweetsList(list) ->
                 if not list.IsEmpty then
@@ -272,7 +273,7 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
             
             let queryMentionsStopWatch = System.Diagnostics.Stopwatch.StartNew()
             let queryMentionsTask = serverActor <? TweetsWithMention(userId)
-            let queryMentionsResponse: Input = Async.RunSynchronously(queryMentionsTask, 5000)
+            let queryMentionsResponse: Input = Async.RunSynchronously(queryMentionsTask)
             match queryMentionsResponse with
             | MentionTweetsList(list) ->
                 if not list.IsEmpty then
@@ -282,7 +283,7 @@ let client (userId: int) (numOfTweets: int) (numToSubscribe: int) (mailbox : Act
             // Get all your own tweets
             let queryOwnTweetsStopWatch = System.Diagnostics.Stopwatch.StartNew()
             let queryOwnTweetsTask = serverActor <? GetTweetsForUser(userId)
-            let queryOwnTweetsResponse: Input = Async.RunSynchronously(queryOwnTweetsTask, 5000)
+            let queryOwnTweetsResponse: Input = Async.RunSynchronously(queryOwnTweetsTask)
             match queryOwnTweetsResponse with
             | TweetsForUserList(list) ->
                 if not list.IsEmpty then
@@ -311,7 +312,7 @@ let clientSystem (userCount:int) (disconnectCount:int) (subscriberCounts: int) (
     let mutable selfTweetsQueryDiff = float(0)
     let rec loop() = actor{
         let! message = mailbox.Receive()
-        printfn "Message = %A" message
+        // printfn "Message = %A" message
         let sender = mailbox.Sender()
         match message with
         | Start -> 
@@ -324,7 +325,7 @@ let clientSystem (userCount:int) (disconnectCount:int) (subscriberCounts: int) (
             for i in 1..userCount do
                 let mutable path = "akka://FSharp/user/"+ (i|> string) 
                 let iActorRef = select path system
-                printfn "iActorRefPath = %s" iActorRef.PathString
+                // printfn "iActorRefPath = %s" iActorRef.PathString
                 iActorRef <! Initialize(false) 
         | PerformanceMetrics(averageTweetTimeDifference,querySubscribedToTimeDifference,queryHashTagElapsedTime,queryMentionsElapsedTime,queryOwnTweetsElapsedTime) ->
             convergedCount <- convergedCount + 1
@@ -334,12 +335,15 @@ let clientSystem (userCount:int) (disconnectCount:int) (subscriberCounts: int) (
             mentionQueryDiff <- mentionQueryDiff + queryMentionsElapsedTime
             selfTweetsQueryDiff<- queryOwnTweetsElapsedTime + selfTweetsQueryDiff
             if convergedCount = userCount then
-                printfn "Final Metrics: "
-                printfn "Avg. time to tweet: %f milliseconds" (float(tweetTimeDiff/float(userCount)))
-                printfn "Avg. time to query tweets subscribe to: %f milliseconds" (float(subscribeQueryDiff/float(userCount)))
-                printfn "Avg. time to query tweets by hashtag: %f milliseconds" (float(hashtagQueryDiff/float(userCount)))
-                printfn "Avg. time to query tweets by mention: %f milliseconds" (float(mentionQueryDiff/float(userCount)))
-                printfn "Avg. time to query all relevant tweets: %f milliseconds" (float(mentionQueryDiff/float(userCount))) 
+                let mutable count = 0
+                for i in 1..100000 do 
+                    count <- count + 1
+                printfn "Final Metrics:\n 
+                Avg. time to tweet: %f milliseconds\n 
+                Avg. time to query tweets subscribe to: %f milliseconds\n 
+                Avg. time to query tweets by hashtag: %f milliseconds\n 
+                Avg. time to query tweets by mention: %f millisecond\n 
+                Avg. time to query all relevant tweets: %f milliseconds" (float(tweetTimeDiff/float(userCount))) (float(subscribeQueryDiff/float(userCount))) (float(hashtagQueryDiff/float(userCount))) (float(mentionQueryDiff/float(userCount))) (float(selfTweetsQueryDiff/float(userCount))) 
                 terminate <- false 
         return! loop()
     }
@@ -362,8 +366,8 @@ let main() =
     else
         // spawn system "serverActor" server 
         // let userCount = fsi.CommandLineArgs.[1] |> int
-        let userCount = 100
-        let maxSubscriberCount = 20
+        let userCount = 1000
+        let maxSubscriberCount = 10
         let disconnectPercentage = 10
         // let maxSubscriberCount = fsi.CommandLineArgs.[2] |> int 
         // let disconnectPercentage = fsi.CommandLineArgs.[3] |> int
@@ -374,4 +378,5 @@ let main() =
         simulate userCount disconnectCount maxSubscriberCount
 
 main()
+
 
